@@ -3,7 +3,7 @@
   <ID>figurine.gs</ID>
   <Name>像素手办</Name>
   <Author>红石菜狗（Steam：月关）</Author>
-  <ModVersion>1.0.3</ModVersion>
+  <ModVersion>1.1.1</ModVersion>
   <Description>三套 IP 共 276 个像素手办（原神 120 / 星穹铁道 96 / 绝区零 60），五档稀有度。含顾客买卖、盲盒与抽奖、掉落、以物易物、交易板；手办可鉴定真伪（正品 / 赝品 / 未鉴定）、可估价赚鉴定费、可考取手办鉴定委员会证书升级；另带 DORO 终端、海子商人、展示柜与货物邮箱。</Description>
   <GameVersions>
     <Version>0.46D</Version>
@@ -13,6 +13,5 @@
   </Assemblies>
   <Capabilities>
     <Capability>files</Capability>
-    <Capability>reflection-external</Capability>
   </Capabilities>
 </Mod>

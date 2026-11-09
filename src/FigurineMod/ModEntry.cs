@@ -109,123 +109,24 @@ namespace FigurinePort
         private static void EnsureDirectory()
         {
             if (_dir != null) return;
-
-            var existing = FindExistingDirectory();
-            if (existing != null)
-            {
-                Debug.Log(LogTag + "复用已有 ModItemDirectory（不抢建）");
-                OnItemDirectoryInit(existing);
-                return;
-            }
             Debug.Log(LogTag + "暂无 ModItemDirectory，等待游戏创建（不抢建）");
         }
 
-        /// <summary>用反射在 DirectoryMaster 里找现成的 ModItemDirectory。</summary>
-        private static ModItemDirectory FindExistingDirectory()
-        {
-            try
-            {
-                var f = typeof(DirectoryMaster).GetField("singletonInstance",
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
-                var dict = f != null ? f.GetValue(null) as System.Collections.IDictionary : null;
-                if (dict == null) return null;
-                foreach (System.Collections.DictionaryEntry e in dict)
-                {
-                    var list = e.Value as System.Collections.IEnumerable;
-                    if (list == null) continue;
-                    foreach (var o in list)
-                    {
-                        var mid = o as ModItemDirectory;
-                        if (mid != null) return mid;
-                    }
-                }
-            }
-            catch (System.Exception __ex) { Safe.Warn("ModEntry.FindExistingDirectory", __ex); }
-            return null;
-        }
-
-        /// <summary>DirectoryMaster 里是否已有「类型名 = ModItemDirectory」的目录（可能是旧程序集实例，cast 不到）。</summary>
-        private static bool HasDirectoryTypeName(string typeName)
-        {
-            try
-            {
-                var f = typeof(DirectoryMaster).GetField("singletonInstance",
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
-                var dict = f != null ? f.GetValue(null) as System.Collections.IDictionary : null;
-                if (dict == null) return false;
-                foreach (System.Collections.DictionaryEntry e in dict)
-                {
-                    var list = e.Value as System.Collections.IEnumerable;
-                    if (list == null) continue;
-                    foreach (var o in list)
-                    {
-                        if (o != null && string.Equals(o.GetType().Name, typeName, StringComparison.Ordinal)) return true;
-                    }
-                }
-            }
-            catch { }
-            return false;
-        }
-
-        private static bool _replayed;
-
         /// <summary>
-        /// 读档前的兜底 + **补发事件**（2026-11-04 修）：
-        ///
-        /// 只靠 `ModHook.OnModItemDirectoryInit` 一次性注册的 mod，只要订阅晚于那次 fire，
-        /// 就永远拿不到目录 —— 这和加载顺序无关，单纯"我们不抢建"解决不了。
-        ///
-        /// 所以在所有 mod 都加载完、都订阅过之后（OnGameLoadedEarly）：
-        ///   ① 还没有目录 → 我们建（Awake 会 fire，所有人都能收到）
-        ///   ② 已经有目录（别的 mod 在加载期建的）→ **主动再 fire 一次**，
-        ///      让错过第一次的 mod 补上；已经注册过的 mod 会因为 `dir.Add` 幂等/自身守卫而无害
+        /// 读档前的兜底（无反射）：所有 mod 都加载、都订阅之后，如果还没有目录，就由本模组创建。
+        /// 原版 `Directory.Awake` 会 AddDirectory → InitDirectory → 触发 OnModItemDirectoryInit。
         /// </summary>
         private static void EnsureDirectoryFallback()
         {
             try
             {
-                var dir = _dir != null ? _dir : FindExistingDirectory();
-                if (dir == null)
-                {
-                    // 实测（多 mod 组合）：DirectoryMaster 里已有同名目录，但那是旧程序集/上一轮初始化的实例，
-                    // 反射 cast 不到 → 再自建只会触发 "duplicate Directory" 并被丢弃。此时不再自建，等补发。
-                    if (HasDirectoryTypeName("ModItemDirectory"))
-                    {
-                        Debug.Log(LogTag + "ModItemDirectory 已存在（类型不匹配/重复初始化），跳过自建，等 OnModItemDirectoryInit");
-                        return;
-                    }
-                    Debug.LogWarning(LogTag + "读档前仍无 ModItemDirectory，由本模组创建（此时所有 mod 都已订阅）");
-                    var go = new GameObject("FigurineModItemDirectory");
-                    UnityEngine.Object.DontDestroyOnLoad(go);
-                    go.AddComponent<ModItemDirectory>();   // Awake: AddDirectory + InitDirectory
-                    dir = _dir != null ? _dir : FindExistingDirectory();
-                }
-                else if (_dir == null)
-                {
-                    OnItemDirectoryInit(dir);
-                }
-
-                if (dir == null)
-                {
-                    Debug.LogWarning(LogTag + "ModItemDirectory 仍取不到（已存在但类型不匹配），跳过；注册由 OnModItemDirectoryInit 补发");
-                    return;
-                }
-
-                // 补发：让「订阅晚于第一次 fire」的 mod 也能拿到目录
-                if (!_replayed)
-                {
-                    _replayed = true;
-                    try
-                    {
-                        // InitDirectory 是 protected，直接反射调 ModHook 的 internal fire 方法
-                        var fire = typeof(ModHook).GetMethod("FireOnModItemDirectoryInit",
-                            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
-                        if (fire != null) fire.Invoke(null, new object[] { dir });
-                        else dir.SendMessage("InitDirectory", SendMessageOptions.DontRequireReceiver);
-                        Debug.Log(LogTag + "已补发 OnModItemDirectoryInit（给订阅晚于首次 fire 的 mod）");
-                    }
-                    catch (System.Exception __ex) { Safe.Warn("ModEntry.Replay", __ex); }
-                }
+                if (_dir != null) return;
+                Debug.LogWarning(LogTag + "读档前仍无 ModItemDirectory，由本模组创建（此时所有 mod 都已订阅）");
+                var go = new GameObject("FigurineModItemDirectory");
+                UnityEngine.Object.DontDestroyOnLoad(go);
+                go.AddComponent<ModItemDirectory>();
+                if (_dir == null)
+                    Debug.LogWarning(LogTag + "ModItemDirectory 创建后仍未收到回调（可能已有同名目录被丢弃），本次不注册");
             }
             catch (System.Exception __ex) { Safe.Warn("ModEntry.EnsureDirectoryFallback", __ex); }
         }
@@ -556,7 +457,8 @@ namespace FigurinePort
             try { Doro.ResetSession(); } catch (System.Exception __ex) { Safe.Warn("ModEntry.cs:335", __ex); }
             Debug.Log(LogTag + "OnGameLoadedNormal，已注册=" + _registered);
             try { EnsureDirectory(); } catch (System.Exception __ex) { Safe.Warn("ModEntry.cs:337", __ex); }
-            try { RuntimeSelfCheck.Run(); } catch (System.Exception __ex) { Safe.Warn("ModEntry.cs:338", __ex); }
+            // 运行时补丁自检已移除：它用反射遍历补丁目标，新版本会拒绝反射能力。
+
             // 调试：Mods\FigurinePort\selftest.txt 存在时，自动跑一遍鉴定面板自测
             try { FigurineSelfTest.RunIfRequested(); } catch (System.Exception __ex) { Safe.Warn("ModEntry.SelfTest", __ex); }
             // 注意：OnGameLoadedNormal 在**物品解码之前**触发（原版先 Fire 再 DecodeSaveItem），

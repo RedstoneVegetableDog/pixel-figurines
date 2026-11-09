@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using UnityEngine;
 
 namespace FigurinePort
@@ -47,22 +46,12 @@ namespace FigurinePort
             var f = new ItemFeature(ItemFeature.FeatureType.Special);
             f.identifier = id;
             f.category = Category;
-            Set(f, "publicDisplay", text);
-            Set(f, "actualDisplay", text);
-            Set(f, "valueModifier", 0);
-            Set(f, "isPublicHidden", false);
-            Set(f, "initiallyShown", shown);
+            // 公开 setter（2026-11-10 去反射）；initiallyShown 默认就是 true
+            f.SetPublicDisplay(text);
+            f.SetActualDisplay(text);
+            f.SetValueModifier(0);
+            f.isPublicHidden = false;
             item.AddItemFeature(f);
-        }
-
-        private static void Set(object obj, string field, object value)
-        {
-            try
-            {
-                var fi = obj.GetType().GetField(field, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (fi != null) fi.SetValue(obj, value);
-            }
-            catch (System.Exception __ex) { Safe.Warn("FigurineFeature.cs:65", __ex); }
         }
 
         public static void Expose(GameItem item)
@@ -71,7 +60,7 @@ namespace FigurinePort
             {
                 var f = item != null ? item.FindItemFeatureByID(FakeId) : null;
                 if (f == null) return;
-                Set(f, "isPublicHidden", false);
+                f.isPublicHidden = false;
                 try { f.ExposeFeature(false, false); } catch (System.Exception __ex) { Safe.Warn("FigurineFeature.cs:75", __ex); }
             }
             catch (System.Exception __ex) { Safe.Warn("FigurineFeature.cs:77", __ex); }

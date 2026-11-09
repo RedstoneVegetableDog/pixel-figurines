@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
@@ -101,10 +100,9 @@ namespace FigurinePort
                     f = new ItemFeature(ItemFeature.FeatureType.Normale);
                     f.identifier = FeatureId;
                     f.category = Category;
-                    Set(f, "publicDisplay", label ? DisplayFake : DisplayGenuine);
-                    Set(f, "actualDisplay", truth ? DisplayFake : DisplayGenuine);
-                    Set(f, "valueModifier", 0);
-                    Set(f, "initiallyShown", true);
+                    f.SetPublicDisplay(label ? DisplayFake : DisplayGenuine);
+                    f.SetActualDisplay(truth ? DisplayFake : DisplayGenuine);
+                    f.SetValueModifier(0);
                     f.isPublicHidden = false;
                     ApplyConditions(f, label, truth);
                     try { item.AddItemFeature(f); } catch (System.Exception __ex) { Safe.Warn("FigurineLabelFeature.Add", __ex); }
@@ -114,8 +112,8 @@ namespace FigurinePort
                 {
                     // 明确给了状态（新建物品 / 鉴定定案）→ 同步覆盖
                     ApplyConditions(f, label, truth);
-                    Set(f, "publicDisplay", label ? DisplayFake : DisplayGenuine);
-                    Set(f, "actualDisplay", truth ? DisplayFake : DisplayGenuine);
+                    f.SetPublicDisplay(label ? DisplayFake : DisplayGenuine);
+                    f.SetActualDisplay(truth ? DisplayFake : DisplayGenuine);
                 }
                 return f;
             }
@@ -143,7 +141,7 @@ namespace FigurinePort
                 var f = Ensure(item);
                 if (f == null) return;
                 f.SetConditions(fake ? _fake : _genuine, f.realCondition ?? (FigurineAuth.TruthFake(item) ? _fake : _genuine));
-                Set(f, "publicDisplay", fake ? DisplayFake : DisplayGenuine);
+                f.SetPublicDisplay(fake ? DisplayFake : DisplayGenuine);
                 f.isPublicHidden = false;
                 try { item.SyncModifiedState(); } catch (System.Exception __ex) { Safe.Warn("FigurineLabelFeature.SetLabelSync", __ex); }
             }
@@ -171,18 +169,10 @@ namespace FigurinePort
             try { return item != null && item.IsTag(FigurineAuth.TagLabelFake); } catch { return false; }
         }
 
-        private static void Set(object obj, string field, object value)
-        {
-            try
-            {
-                if (obj == null) return;
-                var fi = obj.GetType().GetField(field, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (fi != null) fi.SetValue(obj, value);
-            }
-            catch (System.Exception __ex) { Safe.Warn("FigurineLabelFeature.Set", __ex); }
-        }
-
         // ───────────────────────── 原版标签机接线 ─────────────────────────
+
+        /// <summary>标签机当前编辑的手办（OpenUI 时自己记下来，2026-11-10 去反射）。</summary>
+        private static GameItem _current;
 
         /// <summary>原版标签机开面板前，把手办缺的标签特征补上（否则列表里看不到）。</summary>
         [HarmonyPatch(typeof(LabelerUIManager), nameof(LabelerUIManager.OpenUI))]
@@ -193,6 +183,7 @@ namespace FigurinePort
             {
                 try
                 {
+                    _current = __0;
                     if (__0 == null) return;
                     if (!FigurineAuth.IsFigurine(__0)) return;
                     Ensure(__0);
@@ -201,17 +192,9 @@ namespace FigurinePort
             }
         }
 
-        /// <summary>取标签机当前正在编辑的手办（curItem 是 private 字段）。</summary>
         internal static GameItem CurrentLabelerItem()
         {
-            try
-            {
-                var mgr = LabelerUIManager.Instance;
-                if (mgr == null) return null;
-                var f = AccessTools.Field(typeof(LabelerUIManager), "curItem");
-                return f != null ? f.GetValue(mgr) as GameItem : null;
-            }
-            catch { return null; }
+            return _current;
         }
 
         /// <summary>

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
@@ -22,8 +21,9 @@ namespace FigurinePort
     /// ```
     /// 表：按档位 5 张，每张放该档位**所有**手办（原神 + 星铁 + 绝区零）。
     ///
-    /// ⚠️ 正式版 `LootRegistry.groups` 是 private static（beta 的 IL2CPP 版是 public），
-    /// 用 `AccessTools` 反射读。首帧分组没加载时先挂临时权重，读档时 `RetryIfNeeded()` 重算。
+    /// ⚠️ 正式版 `LootRegistry.groups` 是 private static，旧实现用反射读；2026-11-10 改成
+    ///    公开 API `ModHelper.GetLootGroupEntries(groupId)`（不触发 reflection-external 能力）。
+    ///     首帧分组没加载时先挂临时权重，读档时 `RetryIfNeeded()` 重算。
     /// </summary>
     internal static class LootInjection
     {
@@ -48,7 +48,6 @@ namespace FigurinePort
         private static bool _applied;        // 权重已按真实分组算好
         private static bool _tablesBuilt;    // 表已建过（重试时不再重复建）
         private static bool _attachedOnce;   // 组里已有我们的条目（重试时改用 SetWeight）
-        private static FieldInfo _groupsField;
 
         public static bool Applied { get { return _applied; } }
 
@@ -164,68 +163,27 @@ namespace FigurinePort
             }
         }
 
-        private static bool TryAttachLegacy(string groupId, string tableId, float sharePercent, ref bool fallback)
-        {
-            try
-            {
-                float total = GroupTotalExcept(groupId, tableId);
-                float share = Mathf.Clamp(sharePercent, 0f, 90f) / 100f;
-
-                float weight;
-                bool exact = total > 0f && share > 0f;
-                if (exact) weight = total * share / (1f - share);      // beta 的 WeightForShare
-                else { weight = sharePercent * 100f; fallback = true; }
-
-                if (_attachedOnce)
-                {
-                    try { ModHelper.SetLootGroupWeight(ModId, groupId, tableId, weight); }
-                    catch { ModHelper.AddLootGroupEntry(ModId, groupId, tableId, weight); }
-                }
-                else
-                {
-                    ModHelper.AddLootGroupEntry(ModId, groupId, tableId, weight);
-                }
-
-                Debug.Log(FigurineMod.LogTag + $"掉落挂组 {groupId}/{tableId} → 权重 {weight:0.##}"
-                    + (exact ? $"（目标占比 {sharePercent:0.##}%，分组原有总权重 {total:0.##}）" : "（分组为空/不可读，临时权重）"));
-                return true;
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning(FigurineMod.LogTag + "掉落挂组失败 " + groupId + "/" + tableId + "：" + e.GetType().Name);
-                return false;
-            }
-        }
-
-        /// <summary>读回两个分组，核对每张表的实际占比是否等于目标。</summary>
+        /// <summary>读回两个分组，核对每张表的实际占比是否等于目标（公开 API，无反射）。</summary>
         public static void Verify()
         {
             try
             {
-                var groups = Groups();
-                if (groups == null)
-                {
-                    Debug.LogWarning(FigurineMod.LogTag + "掉落自检：读不到 LootRegistry.groups（反射失败），跳过核对");
-                    return;
-                }
-
                 int ok = 0, bad = 0;
                 for (int i = 0; i < TableCount; i++)
                 {
-                    if (VerifyOne(groups, GroupCommon, TableIds[i], CommonShare[i])) ok++; else bad++;
-                    if (VerifyOne(groups, GroupFresh, TableIds[i], FreshShare[i])) ok++; else bad++;
+                    if (VerifyOne(GroupCommon, TableIds[i], CommonShare[i])) ok++; else bad++;
+                    if (VerifyOne(GroupFresh, TableIds[i], FreshShare[i])) ok++; else bad++;
                 }
                 Debug.Log(FigurineMod.LogTag + $"掉落自检完成：符合目标 {ok} 项，偏离 {bad} 项");
             }
             catch (Exception e) { Debug.LogWarning(FigurineMod.LogTag + "掉落自检异常：" + e.GetType().Name); }
         }
 
-        private static bool VerifyOne(Dictionary<string, List<LootEntry>> groups, string groupId, string tableId, float targetPercent)
+        private static bool VerifyOne(string groupId, string tableId, float targetPercent)
         {
             try
             {
-                if (groups == null || !groups.ContainsKey(groupId)) return false;
-                var list = groups[groupId];
+                var list = ModHelper.GetLootGroupEntries(groupId);
                 if (list == null) return false;
 
                 float total = 0f, mine = 0f;
@@ -256,7 +214,6 @@ namespace FigurinePort
         /// <summary>
         /// Harmony 兜底：原版在 `LoadVanillaGroups` 里把分组灌进 `LootRegistry`，
         /// 之后才 `RebuildIfDirty()`。我们在这里后置跑一次，保证分组一定已经就绪。
-        /// （`ModHook.OnLootTablesLoaded` 若是订阅得比触发晚，就靠这个补上。）
         /// </summary>
         [HarmonyPatch(typeof(LootRegistry), "LoadVanillaGroups")]
         internal static class VanillaGroupsLoadedPatch
@@ -273,35 +230,12 @@ namespace FigurinePort
             }
         }
 
-        // ───────────────────────── 反射读分组 ─────────────────────────
-        private static Dictionary<string, List<LootEntry>> Groups()
-        {
-            try
-            {
-                // ⚠️ 必须先摸一下公开的 GroupIds —— 它内部会调 RebuildIfDirty()，
-                //    否则反射拿到的 groups 字典可能还是空的（原版分组只在场景加载后重建）
-                try
-                {
-                    var ids = LootRegistry.GroupIds;
-                    if (ids != null) foreach (var _ in ids) { }
-                }
-                catch (System.Exception __ex) { Safe.Warn("LootInjection.cs:287", __ex); }
-
-                if (_groupsField == null)
-                    _groupsField = AccessTools.Field(typeof(LootRegistry), "groups");
-                if (_groupsField == null) return null;
-                return _groupsField.GetValue(null) as Dictionary<string, List<LootEntry>>;
-            }
-            catch { return null; }
-        }
-
+        // ───────────────────────── 公开 API 读分组 ─────────────────────────
         private static float GroupTotalExceptAny(string groupId, string[] excludeIds)
         {
             try
             {
-                var groups = Groups();
-                if (groups == null || !groups.ContainsKey(groupId)) return 0f;
-                var list = groups[groupId];
+                var list = ModHelper.GetLootGroupEntries(groupId);
                 if (list == null) return 0f;
 
                 float total = 0f;
@@ -311,27 +245,6 @@ namespace FigurinePort
                     bool skip = false;
                     if (excludeIds != null) foreach (var x in excludeIds) if (x == e.id) { skip = true; break; }
                     if (skip) continue;
-                    total += e.weight;
-                }
-                return total;
-            }
-            catch { return 0f; }
-        }
-
-        private static float GroupTotalExcept(string groupId, string tableId)
-        {
-            try
-            {
-                var groups = Groups();
-                if (groups == null || !groups.ContainsKey(groupId)) return 0f;
-                var list = groups[groupId];
-                if (list == null) return 0f;
-
-                float total = 0f;
-                foreach (var e in list)
-                {
-                    if (e == null) continue;
-                    if (!string.IsNullOrEmpty(tableId) && e.id == tableId) continue;
                     total += e.weight;
                 }
                 return total;

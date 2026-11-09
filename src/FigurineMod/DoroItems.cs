@@ -23,17 +23,15 @@ namespace FigurinePort
                 var inv = cw.children[0] as GameInventory;
                 if (inv == null) return;
 
-                var shape = new GridShapeBuilder(w, h).SetDataFill(0).SetDataOutside(1).Build();
-                var pi = inv.GetType().GetProperty("inventoryShape", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                if (pi == null) { Debug.LogWarning(FigurineMod.LogTag + "邮箱：找不到 inventoryShape"); return; }
-                var setter = pi.GetSetMethod(true);
-                if (setter != null) setter.Invoke(inv, new object[] { shape });
-                else
+                var grid = inv as GameGridInventory;
+                if (grid == null)
                 {
-                    var bf = inv.GetType().GetField("<inventoryShape>k__BackingField", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    if (bf != null) bf.SetValue(inv, shape);
+                    Debug.LogWarning(FigurineMod.LogTag + "邮箱：内容库存不是 GameGridInventory，跳过改容量");
+                    return;
                 }
-                try { inv.Validate(); } catch (System.Exception __ex) { Safe.Warn("DoroItems.Validate", __ex); }
+                // 公开 API：GameGridInventory.SetShape(width,height)（2026-11-10 去反射）
+                grid.SetShape(w, h);
+                try { grid.Validate(); } catch (System.Exception __ex) { Safe.Warn("DoroItems.Validate", __ex); }
                 Debug.Log(FigurineMod.LogTag + label + "容量：" + w + "×" + h + " 格");
             }
             catch (Exception e) { Debug.LogWarning(FigurineMod.LogTag + "改邮箱容量失败：" + e.GetType().Name + " " + e.Message); }

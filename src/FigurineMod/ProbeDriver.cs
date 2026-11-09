@@ -44,7 +44,7 @@ namespace FigurinePort
                 //   的定时器全停 → 海子不送礼、盲盒动画卡死且残留到主菜单）
                 if (DebugOn())
                 {
-                    if (Input.GetKeyDown(KeyCode.F8)) { Dump(); RuntimeSelfCheck.Report(); }
+                    if (Input.GetKeyDown(KeyCode.F8)) { Dump(); }
                     if (Input.GetKeyDown(KeyCode.F9))
                     {
                         if (Input.GetKey(KeyCode.LeftShift)) WarehouseTakeSelfTest();   // Shift+F9：仓库取出实测
