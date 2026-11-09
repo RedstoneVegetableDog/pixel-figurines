@@ -7,7 +7,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NoWarn>MSB3277;CS0618</NoWarn>
-    <GameDir>E:\steam\steamapps\common\Probably Stolen</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">E:\steam\steamapps\common\Probably Stolen</GameDir>
   </PropertyGroup>
   <!-- 赝品玩法：已重新启用（Release 也保留）。如需再次屏蔽，取消下面注释即可 -->
   <!--
