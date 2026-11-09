@@ -1,0 +1,102 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using HarmonyLib;
+using UnityEngine;
+
+namespace FigurinePort
+{
+    /// <summary>
+    /// 框选诊断（临时）：挂钩 `ItemMultiSelectHandler.ComputeBandItems`，
+    /// 打印本次框选：
+    ///   ① 起点落在哪个窗口/库存（bandWindow / bandInventory）
+    ///   ② 判定命中的物品 id 列表
+    ///   ③ 屏幕里当前可见的盲盒/手办数量，用来对比"候选里到底有没有它们"
+    /// 只在拖框时触发，最多打 12 次，避免刷屏。
+    /// </summary>
+    [HarmonyPatch(typeof(ItemMultiSelectHandler), "ComputeBandItems")]
+    internal static class SelectionProbe
+    {
+        private static int _left = 12;
+
+        [HarmonyPrefix]
+        private static void Prefix(ItemMultiSelectHandler __instance, ref object __state)
+        {
+            try
+            {
+                if (_left <= 0) return;
+                var f1 = AccessTools.Field(typeof(ItemMultiSelectHandler), "bandWindow");
+                var f2 = AccessTools.Field(typeof(ItemMultiSelectHandler), "bandInventory");
+                var w = f1 != null ? f1.GetValue(__instance) : null;
+                var inv = f2 != null ? f2.GetValue(__instance) : null;
+                string wname = "null"; int witems = -1;
+                if (w != null)
+                {
+                    try { var cmp = w as Component; wname = cmp != null ? cmp.gameObject.name : w.GetType().Name; } catch { }
+                    try { witems = GraphUtils.FindChildrenType<GameItem>((GraphNodeStorage)w).Count; } catch { }
+                }
+                string iname = "null"; int iitems = -1;
+                if (inv != null)
+                {
+                    try { var cmp2 = inv as Component; iname = cmp2 != null ? cmp2.gameObject.name : inv.GetType().Name; } catch { }
+                    try { iitems = ((GameInventory)inv).childItems.Count; } catch { }
+                }
+                Debug.Log(FigurineMod.LogTag + "框选探测：bandWindow=" + (w != null ? w.GetType().Name : "null")
+                    + "（name=" + wname + " 子物品=" + witems + "）"
+                    + " bandInventory=" + (inv != null ? inv.GetType().Name : "null")
+                    + "（name=" + iname + " 直挂物品=" + iitems + "）");
+            }
+            catch (Exception __ex) { Safe.Warn("SelectionProbe.Prefix", __ex); }
+        }
+
+        [HarmonyPostfix]
+        private static void Postfix(ref List<GameItemElement> __result)
+        {
+            try
+            {
+                if (_left <= 0) return;
+                _left--;
+                var sb = new System.Text.StringBuilder();
+                int n = __result != null ? __result.Count : 0;
+                for (int i = 0; i < n && i < 8; i++)
+                {
+                    var it = __result[i];
+                    string id = "?";
+                    try { id = it != null ? it.identifier : "null"; } catch { }
+                    sb.Append(id).Append(' ');
+                }
+                Debug.Log(FigurineMod.LogTag + "框选命中 " + n + " 件：" + sb.ToString().Trim());
+            }
+            catch (Exception __ex) { Safe.Warn("SelectionProbe.Postfix", __ex); }
+        }
+    }
+
+        /// <summary>看 FinalizeBand 之后，handler 内部到底认了几件（私有字段 selectedItems）。</summary>
+        [HarmonyPatch(typeof(ItemMultiSelectHandler), "FinalizeBand")]
+        internal static class FinalizeProbe
+        {
+            [HarmonyPostfix]
+            private static void Postfix(ItemMultiSelectHandler __instance)
+            {
+                try
+                {
+                    var f = AccessTools.Field(typeof(ItemMultiSelectHandler), "selectedItems");
+                    var list = f != null ? f.GetValue(__instance) as System.Collections.Generic.List<GameItemElement> : null;
+                    int n = list != null ? list.Count : -1;
+                    var sb = new System.Text.StringBuilder();
+                    if (list != null)
+                        for (int i = 0; i < list.Count && i < 40; i++)
+                        {
+                            try { sb.Append(list[i] != null ? list[i].identifier : "null").Append(' '); } catch { }
+                        }
+                    int figs = 0;
+                    if (list != null)
+                        foreach (var e in list)
+                        {
+                            try { if (e != null && e.identifier != null && e.identifier.StartsWith("figurine_")) figs++; } catch { }
+                        }
+                    Debug.Log(FigurineMod.LogTag + "框选终态：共 " + n + " 件（其中手办/盲盒 " + figs + " 件）：" + sb.ToString().Trim());
+                }
+                catch (System.Exception __ex) { Safe.Warn("FinalizeProbe", __ex); }
+            }
+        }}

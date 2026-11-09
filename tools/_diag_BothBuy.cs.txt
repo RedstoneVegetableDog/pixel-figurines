@@ -1,0 +1,178 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Text;
+using HarmonyLib;
+using UnityEngine;
+
+namespace FigurinePort
+{
+    /// <summary>
+    /// 【临时诊断】买卖（SELLNBUY）方向顾客「转移货后仍不能买」。
+    /// 只在当前顾客是模组顾客（identifier 以 "figurine" 开头）时打日志；
+    /// 状态变化时才输出，避免刷屏。定位后删除本文件。
+    /// </summary>
+    internal static class BothBuyDiag
+    {
+        private static string _last;
+
+        private static string IdOf(GameItem it)
+        {
+            try { return it == null ? "null" : it.identifier; } catch { return "?"; }
+        }
+
+        private static string ListOf(List<GameItem> items)
+        {
+            var sb = new StringBuilder();
+            if (items == null) return "null";
+            foreach (var it in items)
+            {
+                if (it == null) continue;
+                bool owned = false, un = false;
+                try { owned = GeneralHelper.IsItemOwned(it); } catch { }
+                try { un = FigurineAuth.IsUnappraised(it); } catch { }
+                sb.Append(IdOf(it)).Append('[').Append(owned ? "O" : "C").Append(un ? ",未鉴定" : "").Append("] ");
+            }
+            return sb.ToString();
+        }
+
+        private static void Dump(string where, NegociationUIManager ui)
+        {
+            try
+            {
+                var ps = PlayerStore.Instance;
+                var inst = ps != null ? ps.currentClientInstance : null;
+                var bp = inst != null ? inst.GetClientBlueprint() : null;
+                if (bp == null || string.IsNullOrEmpty(bp.identifier)) return;
+                if (!bp.identifier.StartsWith("figurine", StringComparison.Ordinal)) return;
+
+                int mode = -1;
+                try { var f = AccessTools.Field(typeof(NegociationUIManager), "mode"); if (f != null) mode = Convert.ToInt32(f.GetValue(ui)); } catch { }
+
+                var back = EmporiumEntry.Instance != null ? EmporiumEntry.Instance.GetBackInvItems() : null;
+                var front = EmporiumEntry.Instance != null ? EmporiumEntry.Instance.frontInvinvElement.childItems : null;
+                var nonOwned = new List<GameItem>();
+                try
+                {
+                    var m = AccessTools.Method(typeof(NegociationUIManager), "GetNonOwnedBackInvItems");
+                    if (m != null) nonOwned = (List<GameItem>)m.Invoke(null, null);
+                }
+                catch { }
+
+                var sel = ui != null ? ui.currentNegociatedItem : null;
+                string key = bp.identifier + "|m" + mode + "|b" + ListOf(back) + "|f" + ListOf(front)
+                             + "|n" + ListOf(nonOwned) + "|s" + IdOf(sel) + "|cash" + (ps != null ? ps.playerCash : -1);
+                if (key == _last) return;
+                _last = key;
+
+                Debug.Log(FigurineMod.LogTag + "[诊断] " + where + " client=" + bp.identifier
+                    + " intent=" + (int)bp.clientIntent + " mode=" + mode
+                    + " cash=" + (ps != null ? ps.playerCash : -1)
+                    + " 选中=" + IdOf(sel)
+                    + " | 后柜台(back)=" + ListOf(back)
+                    + " | 前柜台(front)=" + ListOf(front)
+                    + " | 可买列表=" + ListOf(nonOwned));
+            }
+            catch (Exception e) { Debug.LogWarning(FigurineMod.LogTag + "[诊断] 失败 " + e.GetType().Name + " " + e.Message); }
+        }
+
+        [HarmonyPatch(typeof(NegociationUIManager), "RefreshNow")]
+        internal static class RefreshNowDiag
+        {
+            [HarmonyPostfix]
+            private static void Postfix(NegociationUIManager __instance)
+            {
+                Dump("RefreshNow", __instance);
+            }
+        }
+
+        [HarmonyPatch(typeof(StoreTransferButton), "OnClick")]
+        internal static class TransferDiag
+        {
+            [HarmonyPostfix]
+            private static void Postfix()
+            {
+                try
+                {
+                    var ee = EmporiumEntry.Instance;
+                    if (ee == null) return;
+                    Debug.Log(FigurineMod.LogTag + "[诊断] 按转移键：frontVisible="
+                        + (ee.frontInvWindow != null && ee.frontInvWindow.IsVisible())
+                        + " front=" + ListOf(ee.frontInvinvElement != null ? ee.frontInvinvElement.childItems : null)
+                        + " back=" + ListOf(ee.backInvinvElement != null ? ee.backInvinvElement.childItems : null));
+                }
+                catch (Exception e) { Debug.LogWarning(FigurineMod.LogTag + "[诊断] 转移键失败 " + e.GetType().Name); }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 【临时诊断】Ctrl+F6：造一个「买卖」测试顾客 + 2 件非玩家手办摆到前柜台，然后打开交易面板。
+    /// 用来在本地复现「买卖方向买不了」。定位后删除本文件。
+    /// </summary>
+    [HarmonyPatch(typeof(ProbeDriver), "Update")]
+    internal static class BothBuySpawnDiag
+    {
+        [HarmonyPostfix]
+        private static void Postfix()
+        {
+            try
+            {
+                if (!Input.GetKey(KeyCode.LeftControl) || !Input.GetKeyDown(KeyCode.F6)) return;
+
+                var ps = PlayerStore.Instance;
+                var mgr = ps != null ? ps.storeClientManager : null;
+                if (ps == null || mgr == null) { Debug.LogWarning(FigurineMod.LogTag + "[诊断] 不在店内"); return; }
+
+                if (ps.currentClientInstance != null) ps.DismissCurrentClient(false);
+
+                // 先把前柜台原有的东西收进背包，腾出位置（本测试会话不存档）
+                var ee = EmporiumEntry.Instance;
+                if (ee != null && ee.frontInvinvElement != null)
+                {
+                    var old = new List<GameItem>(ee.frontInvinvElement.childItems);
+                    foreach (var it in old)
+                    {
+                        if (it == null) continue;
+                        bool moved = false;
+                        try { moved = GraphUtils.TryAcceptAll(ee.invElement, it) > 0; } catch { }
+                        if (!moved) { try { it.Destroy(); } catch { } }
+                    }
+                }
+
+                var pool = Defs.All();
+                for (int i = 0; i < 2 && pool.Count > 0; i++)
+                {
+                    var def = pool[UnityEngine.Random.Range(0, pool.Count)];
+                    var item = FigurineMod.BuildFigurine(def);
+                    if (item == null) continue;
+                    try { FigurineAuth.Apply(item, FigurineAuth.RollFor(FigurineAuth.Source.CustomerSeller)); } catch { }
+                    bool ok = false;
+                    try { ok = ps.TryAddDirectSellingItemToTable(item, false); } catch { }
+                    Debug.Log(FigurineMod.LogTag + "[诊断] 摆前柜台 " + def.Id + " ok=" + ok + " parent=" + (item.parentInventory != null));
+                }
+
+                var c = new StoreClient();
+                c.identifier = "figurine_test_both";
+                c.displayName = "测试买卖";
+                c.realName = "测试买卖";
+                c.spriteName = "haizi_portrait";
+                c.possibleSprites = new List<string> { "haizi_portrait" };
+                c.clientFaction = StoreClient.FACTION_TOURIST;
+                c.dismissable = true;
+                c.isBargainAvailable = false;
+                c.clientIntent = StoreClient.ClientIntent.SELLNBUY;
+                try { c.SetBudget(3000); } catch { }
+                c.clientBuyingTagList = new List<string> { "ART", "LUXURY_ITEM" };
+                c.clientBuyingIdList = new List<string>();
+                foreach (var d2 in Defs.All()) c.clientBuyingIdList.Add(d2.Id);
+                c.AddBasicDialog();
+                mgr.AddNextClient(c);
+                ps.TryCallNextClient();
+                Debug.Log(FigurineMod.LogTag + "[诊断] 已生成测试买卖顾客（前柜台 2 件非玩家手办）");
+                try { NegociationUIManager.Instance.OpenUI(); } catch (Exception e2) { Debug.LogWarning(FigurineMod.LogTag + "[诊断] OpenUI 失败 " + e2.GetType().Name); }
+            }
+            catch (Exception e) { Debug.LogWarning(FigurineMod.LogTag + "[诊断] 生成测试顾客失败 " + e.GetType().Name + " " + e.Message); }
+        }
+    }
+}
